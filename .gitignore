@@ -168,3 +168,6 @@ logs/
 output/
 /data/gpqa/
 .DS_Store
+index/
+/data/retrieval
+/test*.py

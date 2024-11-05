@@ -1,5 +1,4 @@
 import argparse
-import datetime
 import json
 import logging
 import multiprocessing
@@ -9,17 +8,19 @@ from time import sleep
 from tqdm import tqdm
 
 from swiftsage.agents import SwiftSage
+from swiftsage.embedding_models import JinaModel, JinaAPIModel
 from swiftsage.benchmark.data_loader import load_data
-from swiftsage.utils.commons import api_configs, setup_logging
+from swiftsage.utils import get_index
+from swiftsage.utils.commons import api_configs
 from swiftsage.benchmark.data_utils import parse_question, parse_ground_truth
 from swiftsage.benchmark.evaluate import evaluate_math, evaluate_multiple_choice
 
 
-logger = setup_logging()
+logger = logging.getLogger("SwiftSage")
 
 
-def run_benchmark(swiftsage, args, max_iterations=5, reward_threshold=8):
-    examples = load_data(args.dataset_name, args.split, args.data_dir, args.num_test_sample)
+def run_benchmark(swiftsage, args, max_iterations=3, reward_threshold=3):
+    examples = load_data(args.dataset_name)
 
     res = []
     skip_ids = []
@@ -32,26 +33,20 @@ def run_benchmark(swiftsage, args, max_iterations=5, reward_threshold=8):
         for item in model_responses:
             item = json.loads(item)
             res.append(item)
-            skip_ids.append(item["idx"])
+            skip_ids.append(item["id"])
 
     for example in tqdm(examples, desc=args.dataset_name):
-        if example["idx"] in skip_ids:
+        if example["id"] in skip_ids or example["id"] >= args.num_test_sample:
             continue
-        question = parse_question(example, args.dataset_name)
-        gt_ans = parse_ground_truth(example, args.dataset_name)
-        reasoning, raw_solution, messages = swiftsage.solve(question, max_iterations, reward_threshold)
-        
-        if raw_solution == "No current solution yet.":
-            solution = raw_solution
-        else:
-            solution = raw_solution[len("Answer (from running the code):\n "):]
+        question = example["question"]
+        gt_ans = example["answer"]
+        reasoning, solution, messages, raw_response = swiftsage.solve(question, max_iterations, reward_threshold)
 
         cur_res = {
-            "idx": example["idx"],
+            "id": example["id"],
             "question": question,
             "gt": gt_ans,
             "pred": solution,
-            "raw_pred": raw_solution,
             "reasoning": reasoning,
         }
         res.append(cur_res)
@@ -59,10 +54,10 @@ def run_benchmark(swiftsage, args, max_iterations=5, reward_threshold=8):
         with open(output_path, "a") as fw:
             fw.write(json.dumps(res[-1]) + "\n")
 
-        sleep(30)
+        json.dump({"messages": messages, "raw_response": raw_response}, open(os.path.join(args.output_path, "logs", f"{example['id']}.json"), "w"), indent=2)
     
     # Evaluate the results
-    if args.dataset_name in ["MATH"]:
+    if args.dataset_name in ["math-l5"]:
         res, result_metric = evaluate_math(res)
     elif args.dataset_name in ["gpqa"]:
         res, result_metric = evaluate_multiple_choice(res)
@@ -76,32 +71,48 @@ def run_benchmark(swiftsage, args, max_iterations=5, reward_threshold=8):
 def main(args):
     swift_config = {
         "model_id": args.swift_model_id,
-        "api_config": api_configs[args.api_provider]
+        "api_config": api_configs[args.swift_api_provider]
     }
 
     reward_config = {
         "model_id": args.feedback_model_id,
-        "api_config": api_configs[args.api_provider]
+        "api_config": api_configs[args.feedback_api_provider]
     }
 
     sage_config = {
         "model_id": args.sage_model_id,
-        "api_config": api_configs[args.api_provider]
+        "api_config": api_configs[args.sage_api_provider]
     }
 
     # specify the path to the prompt templates
     prompt_template_dir = args.prompt_template_dir
-    dataset = [] 
-    embeddings = [] # TODO: for retrieval augmentation (not implemented yet now)
+
+    embedding_model, retrieval_dataset, embeddings = None, None, None
+    if args.use_retrieval:
+        if args.embedding_model_type == "jina_api":
+            embedding_model = JinaAPIModel(
+                args.embedding_model_name,
+            )
+        elif args.embedding_model_type == "jina":
+            embedding_model = JinaModel(
+                args.embedding_model_name,
+            )
+        else:
+            raise ValueError("Invalid embedding model type")
+
+        retrieval_dataset = json.load(open(os.path.join(args.retrieval_dataset_path)))
+        embeddings = get_index(embedding_model, retrieval_dataset, args.embedding_dim, args.index_path)
+
     s2 = SwiftSage(
-        dataset,
-        embeddings,
-        prompt_template_dir,
-        swift_config,
-        sage_config,
-        reward_config,
+        prompt_template_dir=prompt_template_dir,
+        swift_config=swift_config,
+        sage_config=sage_config,
+        feedback_config=reward_config,
+        best_of_n=8,
+        retrieval_dataset=retrieval_dataset,
+        embeddings=embeddings,
+        embedding_model=embedding_model,
         use_retrieval=args.use_retrieval,
-        start_with_sage=args.start_with_sage,
     )
 
     run_benchmark(s2, args, args.max_iterations, args.reward_threshold)
@@ -114,28 +125,47 @@ if __name__ == '__main__':
     parser.add_argument("--split", default="test", type=str)
     parser.add_argument("--num_test_sample", default=-1, type=int)  # -1 for full data
 
-    parser.add_argument("--api_provider", default="Together", choices=["Together", "SambaNova"], type=str)
+    parser.add_argument("--api_provider", default="Together", choices=list(api_configs.keys()), type=str)
+    parser.add_argument("--swift_api_provider", choices=list(api_configs.keys()), type=str)
+    parser.add_argument("--feedback_api_provider", choices=list(api_configs.keys()), type=str)
+    parser.add_argument("--sage_api_provider", choices=list(api_configs.keys()), type=str)
     parser.add_argument("--swift_model_id", default="meta-llama/Meta-Llama-3-8B-Instruct-Turbo", type=str)
     parser.add_argument("--feedback_model_id", default="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", type=str)
     parser.add_argument("--sage_model_id", default="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", type=str)
 
     parser.add_argument("--prompt_template_dir", default='./swiftsage/prompt_templates', type=str)
-    parser.add_argument("--use_retrieval", action="store_true")
     parser.add_argument("--start_with_sage", action="store_true")
 
-    parser.add_argument("--max_iterations", default=5, type=int)
-    parser.add_argument("--reward_threshold", default=8, type=int)
+    parser.add_argument("--use_retrieval", action="store_true")
+    parser.add_argument("--embedding_model_type", choices=["jina_api", "jina"], type=str)
+    parser.add_argument("--embedding_model_name", default="jina-embeddings-v3", type=str)
+    parser.add_argument("--embedding_dim", default=1024, type=int)
+    parser.add_argument("--index_path", default="./index", type=str)
+    parser.add_argument("--retrieval_dataset_path", default="./data/retrieval", type=str)
+
+    parser.add_argument("--max_iterations", default=3, type=int)
+    parser.add_argument("--reward_threshold", default=3, type=int)
 
     parser.add_argument("--save_outputs", action="store_true")
     parser.add_argument("--output_path", default="./output", type=str)
     parser.add_argument("--overwrite", action="store_true")
+    
+    parser.add_argument("--run_name", default="", type=str)
 
     args = parser.parse_args()
 
-    if args.api_provider == "SambaNova":
-        args.swift_model_id = args.swift_model_id.split("/")[-1][:-len("Turbo")]
-        args.feedback_model_id = args.feedback_model_id.split("/")[-1][:-len("Turbo")]
-        args.sage_model_id = args.sage_model_id.split("/")[-1][:-len("Turbo")]
+    args.swift_api_provider = args.swift_api_provider or args.api_provider
+    args.feedback_api_provider = args.feedback_api_provider or args.api_provider
+    args.sage_api_provider = args.sage_api_provider or args.api_provider
+
+    if args.run_name:
+        args.output_path = os.path.join(args.output_path, args.dataset_name, args.run_name)
+    else:
+        args.output_path = os.path.join(args.output_path, args.dataset_name, f"{args.swift_model_id.split('/')[-1]}")
+    
+    if not os.path.exists(args.output_path):
+        os.system(f"mkdir -p {args.output_path}")
+        os.system(f"mkdir -p {args.output_path}/logs")
 
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path)

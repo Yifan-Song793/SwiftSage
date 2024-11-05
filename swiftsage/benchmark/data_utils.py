@@ -272,6 +272,10 @@ def extract_answer(pred_str, data_name):
         pred = pred_str.split('he answer is')[-1].strip()
     elif ('final answer is' in pred_str):
         pred = pred_str.split('final answer is')[-1].strip()
+    elif "is: " in pred_str:
+        pred = pred_str.split("is: ")[-1].strip()
+    elif "is " in pred_str:
+        pred = pred_str.split("is ")[-1].strip()
     # elif extract_program_output(pred_str) != "":
         # fall back to program
         # pred = extract_program_output(pred_str)
@@ -297,7 +301,7 @@ def extract_answer(pred_str, data_name):
 
 def parse_ground_truth(example: Dict[str, Any], data_name):
     # parse ground truth
-    if data_name in ["MATH", "math", "math_oai", "minerva_math", "ocw", "amps", "hungarian_exam"]:
+    if data_name in ["MATH", "math", "math-l5", "math_oai", "minerva_math", "ocw", "amps", "hungarian_exam"]:
         gt_ans = example['answer']
     elif data_name == "gsm8k":
         gt_ans = example['answer'].split("####")[-1]

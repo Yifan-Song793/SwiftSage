@@ -24,69 +24,40 @@ def load_jsonl(file):
 
 
 def load_data(
-        data_name, 
-        split='test', 
-        data_dir='./data',
-        num_test_sample=-1,
+        data_name,
     ):
-    if data_name.lower() == "math":
-        data_name = 'MATH'  # we use 500 problem test split in "Let's Verify Step-by-Step"
-    data_file = f"{data_dir}/{data_name}/{split}.jsonl"
-    if os.path.exists(data_file):
-        examples = list(load_jsonl(data_file))
+    if data_name == "gpqa":
+        dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train")
+        tmp_examples = list(dataset)
+        examples = []
+        random.seed(42)
+        for idx, example in enumerate(tmp_examples):
+            list_choices = [example['Incorrect Answer 1'], example['Incorrect Answer 2'], example['Incorrect Answer 3'], example['Correct Answer']]
+            random.shuffle(list_choices)
+            abcd = "ABCD"
+            answer = abcd[list_choices.index(example['Correct Answer'])]
+            
+            options = list_choices
+            assert len(options) == 4
+            for i, (label, option) in enumerate(zip('ABCD', options)):
+                options[i] = f"({label}) {str(option).strip()}"
+            options = ", ".join(options)
+
+            examples.append({
+                "id": idx,
+                "question": f"{example['Question'].strip()}\nWhat of the following is the right choice? Explain your answer.\n{options}",
+                "answer": answer,
+            })
+        dataset = examples
+    elif data_name == "math-l5":
+        dataset = load_dataset("AI-MO/aimo-validation-math-level-5", split="train")
+        dataset = dataset.rename_column("problem", "question")
     else:
-        if data_name == "mmlu_stem":
-            dataset = load_dataset("hails/mmlu_no_train", 'all', split='test')
-            # only keep stem subjects
-            stem_subjects = ['abstract_algebra', 'astronomy', 'college_biology', 'college_chemistry',
-                'college_computer_science', 'college_mathematics', 'college_physics', 'computer_security',
-                'conceptual_physics', 'electrical_engineering', 'elementary_mathematics', 'high_school_biology',
-                'high_school_chemistry', 'high_school_computer_science', 'high_school_mathematics',
-                'high_school_physics', 'high_school_statistics', 'machine_learning']
-            dataset = dataset.rename_column("subject", "type")
-            dataset = dataset.filter(lambda x: x['type'] in stem_subjects)
-            examples = list(dataset)
-            examples = [lower_keys(example) for example in examples]
-        elif data_name == "mathvista":
-            raise NotImplementedError(data_name)
-        elif data_name == "gpqa":
-            dataset = load_dataset("Idavidrein/gpqa", "gpqa_diamond", split="train")
-            tmp_examples = list(dataset)
-            examples = []
-            for example in tmp_examples:
-                list_choices = [example['Incorrect Answer 1'], example['Incorrect Answer 2'], example['Incorrect Answer 3'], example['Correct Answer']]
-                random.shuffle(list_choices)
-                choices = list_choices
-                answer = choices.index(example['Correct Answer'])
-                examples.append({
-                    "question": example['Question'],
-                    "high-level domain": example['High-level domain'],
-                    "subdomain": example['Subdomain'],
-                    "choices": choices,
-                    "answer": answer,
-                })
-        elif data_name == "codeforces":
-            raise NotImplementedError(data_name)
-        else:
-            raise NotImplementedError(data_name)
-
-        dataset = Dataset.from_list(examples)
-        os.makedirs(f"{data_dir}/{data_name}", exist_ok=True)
-        dataset.to_json(data_file)
-
-    # add 'idx' in the first column
-    if 'idx' not in examples[0]:
-        examples = [{'idx': i, **example} for i, example in enumerate(examples)]
-
-    # dedepulicate & sort
-    examples = sorted(examples, key=lambda x: x['idx'])
-
-    if num_test_sample > 0:
-        examples = examples[:num_test_sample]
-
-    return examples
+        raise NotImplementedError(data_name)
+    
+    return dataset
 
 
 if __name__ == "__main__":
-    examples = load_data("gpqa", "test")
+    examples = load_data("gpqa")
     print('test')

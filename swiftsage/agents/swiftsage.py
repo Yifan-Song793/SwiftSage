@@ -1,5 +1,6 @@
-import json
 import logging
+import re
+from collections import Counter
 
 from swiftsage.agents import SwiftAgent, SageAgent, Feedback, RetrievalAugmentation
 from swiftsage.utils import LLMClient, PromptTemplate, PythonExecutor
@@ -9,10 +10,21 @@ logger = logging.getLogger("SwiftSage")
 
 
 class SwiftSage:
-    def __init__(self, dataset, embeddings, prompt_template_dir, swift_config, sage_config, feedback_config, use_retrieval=False, start_with_sage=False):
+    def __init__(
+        self, 
+        prompt_template_dir, 
+        swift_config, 
+        sage_config, 
+        feedback_config, 
+        best_of_n=1,
+        use_retrieval=False, 
+        retrieval_dataset=None, 
+        embeddings=None, 
+        embedding_model=None,
+    ):
         prompt_template = PromptTemplate(prompt_template_dir)
         
-        retrieval_augmentation = RetrievalAugmentation(dataset, embeddings) if use_retrieval else None
+        retrieval_augmentation = RetrievalAugmentation(embedding_model, retrieval_dataset, embeddings) if use_retrieval else None
         
         # add logger to the following LLMClient 
         swift_llm = LLMClient(**swift_config, logger=logger)
@@ -22,116 +34,146 @@ class SwiftSage:
         self.swift = SwiftAgent(prompt_template, swift_llm, retrieval_augmentation)
         self.sage = SageAgent(prompt_template, sage_llm)
         self.feedback_model = Feedback(prompt_template, feedback_llm)
-        self.start_with_sage = start_with_sage
-        # self.executor = PythonExecutor(get_answer_from_stdout=True)
-    
-    def solve(self, problem, max_iterations=10, reward_threshold=8):
-        messages = []
-        
-        def log_and_append(message):
-            logger.info(message)
-            messages.append(message)
 
-        log_and_append(f"Starting to solve problem: {problem}")
-        current_solution = "No current solution yet."  # final answer
+        self.swift_n = best_of_n
+
+        self.messages = {}
+        self.raw_messages = {}
+
+    def reset(self):
+        self.feedback_model.reset()
+        self.messages = {}
+        self.raw_messages = {}
+
+    def parse_and_execute(self, parsed_response):
+        current_plan = parsed_response.get("plan", None)
+        current_code = parsed_response.get("code", None)
+
+        if not current_code:
+            return {
+            "plan": current_plan or "No plan provided in the response.",
+            "code": "No code provided in the response.",
+            "code_report": "No code provided in the response.",
+            "solution": None,
+        }
+
+        # Call sandbox to run the code and get the result
+        executor = PythonExecutor(get_answer_from_stdout=True)
+        code_result, code_report = executor.apply(current_code)
+
+        if code_report != "Done":
+            return {
+                "plan": current_plan,
+                "code": current_code,
+                "code_report": f"Code execution failed. The error message is: \n{code_report}",
+                "solution": None,
+            }
+
+        match = re.search(r'\bis[:\s]*(.*)$', code_result)
+        if match:
+            code_result = match.group(1).strip()
+
+        return {
+            "plan": current_plan,
+            "code": current_code,
+            "code_report": code_report,
+            "solution": code_result,
+        }
+        
+    def solve(self, problem, max_iterations=10, reward_threshold=3):
+        self.reset()
+
         current_reasoning = "No reasoning steps yet."  # reasoning steps
-        plan = "Initial plan: Take a deep breath and think step by step."
+        current_solution = "No current solution yet."  # final answer
         critical_feedback = "No critical feedback yet."  # Initialize critical_feedback
-        solved = False
 
+        # Use the Swift Agent and refine the solution
         for i in range(max_iterations):
-            log_and_append(f"Iteration {i+1}")
-
-            #  Use the Sage Agent 
-            if (i == 0 and self.start_with_sage) or self.feedback_model.should_consult_sage():
-                sage_parsed = self.sage.generate_response(problem, current_reasoning, current_solution) 
-                critical_feedback = sage_parsed["critical_feedback"]
-                current_reasoning = sage_parsed["reasoning_steps"] 
-                current_code = sage_parsed["code"] 
-
-                solved = sage_parsed["solved"].lower() == "true" if i != 0 else sage_parsed["solved"] 
-                log_and_append(f"Sage's decision: solved={solved}")
-                if solved:
-                    log_and_append("Sage has found a perfect solution. Returning the reasoning and solution.")
-                    return current_reasoning, current_solution, messages
-                log_and_append(f"Sage's feedback (iteration {i+1}):\n{critical_feedback}")
-                log_and_append(f"Sage's reasoning steps:\n{current_reasoning}")
-                self.sage.feedbacks[i] = critical_feedback
-                
-                # run the code 
-                executor = PythonExecutor(get_answer_from_stdout=True)
-                code_result, code_report = executor.apply(current_code)
-                log_and_append(f"Sage Code execution report: {code_report}")
-                log_and_append(f"Sage Code execution result: {code_result}")
-                current_reasoning = current_reasoning + f"\n\nThe generated code is:\n\n```python\n{current_code}\n```"
-                current_solution = "Answer (from running the code):\n " + code_result
-                
-                log_and_append("Activated Sage, so we should return the reasoning and solution from Sage.")
-                return current_reasoning, current_solution, messages
-            
-            if not solved:
-                # Use the Swift Agent 
-                swift_parsed = self.swift.generate_response(problem, current_reasoning, current_solution, plan, critical_feedback)
-                
-                if "code" not in swift_parsed and "final_answer" not in swift_parsed: 
-                    log_and_append("Swift's response does not contain the 'final_answer' or 'code' field. Returning raw response.")
-                    self.feedback_model.scores.append(0)
-                    self.feedback_model.feedbacks.append("No feedback")
-                    self.feedback_model.stagnant_count += max_iterations # force to use Sage Agent
-                    continue 
-                
-                current_plan = swift_parsed["plan"]
-                current_code = swift_parsed["code"]
-                current_answer = swift_parsed.get("final_answer", None)
-
-                self.swift.plans[i] = current_plan
-                self.swift.codes[i] = current_code  
-
-                log_and_append(f"Swift's plan:\n{current_plan}")
-                log_and_append(f"Swift's code:\n```python\n{current_code}\n```")
-
-                # Call sandbox to run the code and get the result
-                executor = PythonExecutor(get_answer_from_stdout=True)
-                code_result, code_report = executor.apply(current_code)
-                if code_report != "Done":
-                    # retry generate_response for swift 
-                    log_and_append(f"Code execution report: {code_report}")
-                    log_and_append("Code execution failed. Retrying the Swift agent.")
-                    critical_feedback = f"Code execution failed. The error message is: \n{code_report}"
-                    continue
-                log_and_append(f"Code execution report: {code_report}")
-                log_and_append(f"Code execution result: {code_result}")
-            
-                current_reasoning = current_plan + f"\nThe generated code is:\n```python\n{current_code}\n```"
-                current_solution = "Answer (from running the code):\n " + code_result
-
-                # Calling the reward model to provide feedback and score 
-                reward_parsed = self.feedback_model.calculate_reward(problem, current_reasoning, current_solution)
-                score = int(reward_parsed["score"])
-                critical_feedback = reward_parsed["feedback"] 
-                prev_score = self.feedback_model.scores[-1] if len(self.feedback_model.scores) > 0 else 0
-                self.feedback_model.scores.append(score)
-                self.feedback_model.feedbacks.append(critical_feedback)
-
-                log_and_append(f"Reward for iteration {i+1}: {score}/10")
-                log_and_append(f"Feedback: {critical_feedback}")
-
-                if False and score < prev_score:
-                    log_and_append("Score is lower than the previous score. Stopping the iteration. Reverting to the previous solution and reasoning.")
-                    # revert to the previous solution and reasoning
-                    current_solution = self.swift.codes[i-1]
-                    current_reasoning = self.swift.plans[i-1]
-                    continue 
-
-                # critical_feedback = feedback 
-
-            if score >= reward_threshold or solved:
-                log_and_append("Perfect solution found!")
-                return current_reasoning, current_solution, messages 
-            
             if self.feedback_model.should_consult_sage():
-                log_and_append("Reward model: The solution quality hasn't improved recently. Consulting Sage for the next iteration.")
+                break
+
+            # Best-of-N for Swift
+            swift_parsed_list, raw_swift_messages = self.swift.generate_response(problem, current_reasoning, current_solution, critical_feedback, n=self.swift_n)
+            self.raw_messages[f"Swift {i+1}"] = raw_swift_messages
+
+            swift_res_list = []
+            for swift_parsed in swift_parsed_list:
+                swift_res_list.append(self.parse_and_execute(swift_parsed))
+
+            cur_solutions = [res["solution"] for res in swift_res_list]
+            filtered_solutions = [res for res in cur_solutions if res is not None]
+
+            # N swift all failed
+            if len(filtered_solutions) == 0:
+                swift_res = swift_res_list[0]
+                current_reasoning = swift_res['plan'] + f"\nThe generated code is:\n```python\n{swift_res['code']}\n```"
+                current_solution = "No current solution yet."
+                critical_feedback = swift_res["code_report"]
+                self.feedback_model.scores.append(0)
+
+                self.messages[f"Swift {i+1}"] = swift_res
+                self.messages[f"Feedback {i+1}"] = {
+                    "score": 0,
+                    "feedback": critical_feedback
+                }
+                continue
+            
+            # majority voting
+            solution_counts = Counter(filtered_solutions)
+            swift_solution, _ = solution_counts.most_common(1)[0]
+            swift_res = swift_res_list[cur_solutions.index(swift_solution)]
+
+            self.messages[f"Swift {i+1}"] = swift_res
+
+            current_reasoning = swift_res['plan'] + f"\nThe generated code is:\n```python\n{swift_res['code']}\n```"
+            current_solution = swift_res['solution']
+
+            # Calling the reward model to provide feedback and score 
+            reward_parsed, raw_feedback_message = self.feedback_model.calculate_reward(problem, current_reasoning, current_solution)
+            score = int(reward_parsed["score"])
+            critical_feedback = reward_parsed["feedback"]
+            self.feedback_model.scores.append(score)
+
+            self.messages[f"Feedback {i+1}"] = {
+                "score": score,
+                "feedback": critical_feedback
+            }
+            self.raw_messages[f"Feedback {i+1}"] = raw_feedback_message
+
+            if score >= reward_threshold:
+                return current_reasoning, current_solution, self.messages, self.raw_messages
+            
+        # if the loop ends without reaching the reward_threshold, consult the Sage Agent
+        sage_parsed, raw_sage_message = self.sage.generate_response(problem, current_reasoning, current_solution) 
+
+        self.raw_messages[f"Sage"] = raw_sage_message
+
+        solved = sage_parsed.get("solved", "False").lower() == "true"
+        critical_feedback = sage_parsed.get("critical_feedback", None)
+        current_reasoning = sage_parsed.get("reasoning_steps", None)
+        current_code = sage_parsed.get("code", None)
+
+        self.messages["Sage"] = {
+            "solved": solved,
+            "feedback": critical_feedback,
+            "plan": current_reasoning,
+            "code": current_code,
+            "code_report": None,
+            "solution": current_solution,
+        }
+
+        # if the swift's answer is correct, directly return the answer
+        if solved:
+            return current_reasoning, current_solution, self.messages, self.raw_messages
         
-        log_and_append("Max iterations reached without finding a perfect solution.")
-        log_and_append("Problem solving completed")
-        return current_reasoning, current_solution, messages
+        # run the code 
+        executor = PythonExecutor(get_answer_from_stdout=True)
+        code_result, code_report = executor.apply(current_code)
+
+        self.messages[f"Sage"]["code_report"] = code_report
+        self.messages[f"Sage"]["solution"] = code_result
+
+        current_reasoning = current_reasoning + f"\n\nThe generated code is:\n\n```python\n{current_code}\n```"
+        current_solution = code_result
+        
+        return current_reasoning, current_solution, self.messages, self.raw_messages

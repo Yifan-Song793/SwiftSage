@@ -136,15 +136,10 @@ Note that the above are some example tasks and output formats. You need to solve
 <current_solution>
 </final_answer>
 
-
-
 --- 
 
 ## Critical Feedback 
 <critical_feedback>
-
-### Suggested Plan
-<revised_plan>
 
 --- 
 
@@ -166,7 +161,7 @@ Note that the code should not ask for any input from console, but it should be s
 </plan>
 
 <code>
-[Your python code to solve the current problem (instead of the example problems). Please print the final answer at the end of the code.]
+[Your python code to solve the current problem (instead of the example problems). Please print the final answer at the end of the code. Do not add any prefix like "The answer is" before the final answer]
 </code> 
  
 You must follow the format strictly, do not miss any field.  
