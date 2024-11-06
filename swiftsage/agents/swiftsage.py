@@ -58,7 +58,8 @@ class SwiftSage:
         }
 
         # Call sandbox to run the code and get the result
-        executor = PythonExecutor(get_answer_from_stdout=True)
+        # add a timeout to the executor
+        executor = PythonExecutor(get_answer_from_stdout=True, timeout=5)
         code_result, code_report = executor.apply(current_code)
 
         if code_report != "Done":
@@ -80,7 +81,7 @@ class SwiftSage:
             "solution": code_result,
         }
         
-    def solve(self, problem, max_iterations=10, reward_threshold=3):
+    def solve(self, problem, max_iterations=10, reward_threshold=1):
         self.reset()
 
         current_reasoning = "No reasoning steps yet."  # reasoning steps
@@ -128,10 +129,10 @@ class SwiftSage:
             current_reasoning = swift_res['plan'] + f"\nThe generated code is:\n```python\n{swift_res['code']}\n```"
             current_solution = swift_res['solution']
 
-            # Calling the reward model to provide feedback and score 
+            # Calling the reward model to provide feedback and score
             reward_parsed, raw_feedback_message = self.feedback_model.calculate_reward(problem, current_reasoning, current_solution)
-            score = int(reward_parsed["score"])
-            critical_feedback = reward_parsed["feedback"]
+            score = int(reward_parsed.get("score", 0))
+            critical_feedback = reward_parsed.get("feedback", None)
             self.feedback_model.scores.append(score)
 
             self.messages[f"Feedback {i+1}"] = {
@@ -163,7 +164,7 @@ class SwiftSage:
         }
 
         # if the swift's answer is correct, directly return the answer
-        if solved:
+        if solved or current_code is None:
             return current_reasoning, current_solution, self.messages, self.raw_messages
         
         # run the code 

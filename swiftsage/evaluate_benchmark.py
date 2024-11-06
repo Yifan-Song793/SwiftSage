@@ -3,7 +3,6 @@ import json
 import logging
 import multiprocessing
 import os
-from time import sleep
 
 from tqdm import tqdm
 
@@ -12,14 +11,13 @@ from swiftsage.embedding_models import JinaModel, JinaAPIModel
 from swiftsage.benchmark.data_loader import load_data
 from swiftsage.utils import get_index
 from swiftsage.utils.commons import api_configs
-from swiftsage.benchmark.data_utils import parse_question, parse_ground_truth
 from swiftsage.benchmark.evaluate import evaluate_math, evaluate_multiple_choice
 
 
 logger = logging.getLogger("SwiftSage")
 
 
-def run_benchmark(swiftsage, args, max_iterations=3, reward_threshold=3):
+def run_benchmark(swiftsage, args, max_iterations=3, reward_threshold=1):
     examples = load_data(args.dataset_name)
 
     res = []
@@ -36,7 +34,7 @@ def run_benchmark(swiftsage, args, max_iterations=3, reward_threshold=3):
             skip_ids.append(item["id"])
 
     for example in tqdm(examples, desc=args.dataset_name):
-        if example["id"] in skip_ids or example["id"] >= args.num_test_sample:
+        if example["id"] in skip_ids or (args.num_test_sample != -1 and example["id"] >= args.num_test_sample):
             continue
         question = example["question"]
         gt_ans = example["answer"]
@@ -131,7 +129,7 @@ if __name__ == '__main__':
     parser.add_argument("--sage_api_provider", choices=list(api_configs.keys()), type=str)
     parser.add_argument("--swift_model_id", default="meta-llama/Meta-Llama-3-8B-Instruct-Turbo", type=str)
     parser.add_argument("--feedback_model_id", default="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", type=str)
-    parser.add_argument("--sage_model_id", default="meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo", type=str)
+    parser.add_argument("--sage_model_id", default="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", type=str)
 
     parser.add_argument("--prompt_template_dir", default='./swiftsage/prompt_templates', type=str)
     parser.add_argument("--start_with_sage", action="store_true")
@@ -144,7 +142,7 @@ if __name__ == '__main__':
     parser.add_argument("--retrieval_dataset_path", default="./data/retrieval", type=str)
 
     parser.add_argument("--max_iterations", default=3, type=int)
-    parser.add_argument("--reward_threshold", default=3, type=int)
+    parser.add_argument("--reward_threshold", default=1, type=int)
 
     parser.add_argument("--save_outputs", action="store_true")
     parser.add_argument("--output_path", default="./output", type=str)

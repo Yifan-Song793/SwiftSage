@@ -31,11 +31,11 @@ class Feedback:
             {"role": "user", "content": feedback_prompt}
         ]
         if prefill:
-            messages.append({"role": "assistant", "content": "<feedback>"}) # prefix-filling 
+            messages.append({"role": "assistant", "content": "<score>"}) # prefix-filling 
         
         response = self.llm_client.generate_response(messages)[0]
         if prefill and not self.llm_client.prefix_in_response:
-            response = "<feedback>" + response
+            response = "<score>" + response
         
         raw_messages = {
             "model_input": feedback_prompt,

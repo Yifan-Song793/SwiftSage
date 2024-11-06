@@ -4,8 +4,7 @@ python $DEBUG_MODE -m swiftsage.evaluate_benchmark \
     --swift_api_provider vLLM \
     --swift_model_id /home/yifan/models/Llama-3.1-8B-Instruct \
     --dataset_name math-l5 \
-    --prompt_template_dir ./swiftsage/prompt_templates \
-    --num_test_sample 10 \
+    --prompt_template_dir ./swiftsage/prompt_templates
 
 # python $DEBUG_MODE -m swiftsage.evaluate_benchmark \
 #     --dataset_name gpqa \
