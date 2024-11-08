@@ -171,3 +171,5 @@ output/
 index/
 /data/retrieval
 /test*.py
+/test.sh
+/test.txt

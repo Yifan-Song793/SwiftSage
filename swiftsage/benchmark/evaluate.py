@@ -28,7 +28,7 @@ def evaluate_multiple_choice(samples: list=None, file_path: str=None):
 
     params = []
     for idx, sample in enumerate(samples):
-        pred = extract_multi_choice_answer(sample['pred'])
+        pred = sample['pred']
         params.append((
             idx,
             pred,

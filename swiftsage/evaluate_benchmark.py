@@ -20,6 +20,10 @@ logger = logging.getLogger("SwiftSage")
 def run_benchmark(swiftsage, args, max_iterations=3, reward_threshold=1):
     examples = load_data(args.dataset_name)
 
+    # decide start_index and end_index by num_shards and shard_id  
+    if args.num_shards > 1:
+        examples = examples.shard(num_shards=args.num_shards, index=args.shard_id, contiguous=True)
+
     res = []
     skip_ids = []
 
@@ -34,7 +38,7 @@ def run_benchmark(swiftsage, args, max_iterations=3, reward_threshold=1):
             skip_ids.append(item["id"])
 
     for example in tqdm(examples, desc=args.dataset_name):
-        if example["id"] in skip_ids or (args.num_test_sample != -1 and example["id"] >= args.num_test_sample):
+        if example["id"] in skip_ids:
             continue
         question = example["question"]
         gt_ans = example["answer"]
@@ -101,12 +105,24 @@ def main(args):
         retrieval_dataset = json.load(open(os.path.join(args.retrieval_dataset_path)))
         embeddings = get_index(embedding_model, retrieval_dataset, args.embedding_dim, args.index_path)
 
+    multiple_choice = args.dataset_name in ["gpqa"]
+    if multiple_choice:
+        multiple_choice_config = {
+            "model_id": args.swift_model_id,
+            "api_config": api_configs[args.swift_api_provider]
+        }
+    else:
+        multiple_choice_config = None
+
     s2 = SwiftSage(
         prompt_template_dir=prompt_template_dir,
         swift_config=swift_config,
         sage_config=sage_config,
         feedback_config=reward_config,
-        best_of_n=8,
+        multiple_choice=multiple_choice,
+        multiple_choice_config=multiple_choice_config,
+        only_swift=args.only_swift,
+        best_of_n=args.best_of_n,
         retrieval_dataset=retrieval_dataset,
         embeddings=embeddings,
         embedding_model=embedding_model,
@@ -121,7 +137,8 @@ if __name__ == '__main__':
     parser.add_argument("--dataset_name", default="MATH", type=str)
     parser.add_argument("--data_dir", default="./data", type=str)
     parser.add_argument("--split", default="test", type=str)
-    parser.add_argument("--num_test_sample", default=-1, type=int)  # -1 for full data
+    parser.add_argument('--num_shards', default=1, type=int)
+    parser.add_argument("--shard_id", default=0, type=int)
 
     parser.add_argument("--api_provider", default="Together", choices=list(api_configs.keys()), type=str)
     parser.add_argument("--swift_api_provider", choices=list(api_configs.keys()), type=str)
@@ -132,7 +149,8 @@ if __name__ == '__main__':
     parser.add_argument("--sage_model_id", default="meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", type=str)
 
     parser.add_argument("--prompt_template_dir", default='./swiftsage/prompt_templates', type=str)
-    parser.add_argument("--start_with_sage", action="store_true")
+    parser.add_argument("--only_swift", action="store_true")
+    parser.add_argument("--best_of_n", default=1, type=int)
 
     parser.add_argument("--use_retrieval", action="store_true")
     parser.add_argument("--embedding_model_type", choices=["jina_api", "jina"], type=str)

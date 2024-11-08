@@ -3,7 +3,7 @@
 ## Similar Examples with Solutions
 
 ### Example Task 0
- 
+
 <task>
 Hi, how are you?
 </task>
@@ -17,11 +17,6 @@ Step 2: Ask how you can help.
 print("Hi, I'm doing well. How are you?")
 print("How can I help you?")
 </code>
-
-<final_answer>
-Hi, I'm doing well. How are you?
-How can I help you?
-</final_answer>
 
 ### Example Task 1
  
@@ -65,11 +60,6 @@ spherical_coordinates = rectangular_to_spherical()
 print(spherical_coordinates)  
 </code>
 
-
-<final_answer>
-(6, -pi/2, pi/3)
-</final_answer>
-
 ### Example Task 2 
 
 <task>
@@ -105,10 +95,6 @@ def compare_lifespans():
 result = compare_lifespans()
 print(f"{result} lived longer.")
 </code>
-
-<final_answer>
-Jonathan Kaplan lived longer. 
-</final_answer>
 
 
 ---

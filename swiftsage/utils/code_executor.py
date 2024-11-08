@@ -108,7 +108,7 @@ class PythonExecutor:
 if __name__ == "__main__":
     executor = PythonExecutor(get_answer_from_stdout=True)
     code = """
-print("test")
+import math\n\n# Define the reduced Planck constant\nh_bar = 6.582 * (10**-16)  # eV sec\n\n# Define the lifetimes of the quantum states\nlifetime1 = 10**-9  # sec\nlifetime2 = 10**-8  # sec\n\n# Calculate the minimum energy difference using the Heisenberg uncertainty principle\nmin_energy_diff = h_bar / max(lifetime1, lifetime2)\n\n# Print the minimum energy difference\nprint(\"The minimum energy difference required to clearly distinguish the two energy levels is:\", min_energy_diff, \"eV\")\n\n# Check which option is the right choice\nif min_energy_diff >= 10**-4:\n    print(\"The right choice is (C) 10^-4 eV\")\nelif min_energy_diff >= 10**-11:\n    print(\"The right choice is (D) 10^-11 eV\")\nelse:\n    print(\"The right choice is (A) 10^-9 eV or (B) 10^-8 eV\")
 """
     result, report = executor.apply(code)
     print("Result:", result)

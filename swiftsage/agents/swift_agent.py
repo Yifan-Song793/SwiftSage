@@ -41,7 +41,7 @@ class SwiftAgent(Agent):
         if prefill:
             messages.append({"role": "assistant", "content": "<plan>"}) # prefix-filling 
         
-        responses = self.llm_client.generate_response(messages, n=n) 
+        responses = self.llm_client.generate_response(messages, n=n)
         if prefill and not self.llm_client.prefix_in_response:
             responses = ["<plan>" + response for response in responses]
 

@@ -110,9 +110,9 @@ class PromptTemplate:
         self.load_templates()
 
     def load_templates(self):
-        for filename in ['swift_template.md', 'sage_template.md', 'feedback_template.md']:
+        for filename in ['swift_template.md', 'sage_template.md', 'feedback_template.md', 'multiple_choice_template.md']:
             with open(os.path.join(self.template_dir, filename), 'r') as f:
-                key = filename.split('_')[0]
+                key = filename[:-len("_template.md")]
                 self.templates[key] = f.read()
 
     def format(self, key, **kwargs):

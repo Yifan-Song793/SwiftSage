@@ -2,7 +2,7 @@ import logging
 import re
 from collections import Counter
 
-from swiftsage.agents import SwiftAgent, SageAgent, Feedback, RetrievalAugmentation
+from swiftsage.agents import SwiftAgent, SageAgent, Feedback, RetrievalAugmentation, MultipleChoiceAgent
 from swiftsage.utils import LLMClient, PromptTemplate, PythonExecutor
 
 
@@ -15,7 +15,10 @@ class SwiftSage:
         prompt_template_dir, 
         swift_config, 
         sage_config, 
-        feedback_config, 
+        feedback_config,
+        multiple_choice=False,
+        multiple_choice_config=None,
+        only_swift=False,
         best_of_n=1,
         use_retrieval=False, 
         retrieval_dataset=None, 
@@ -34,7 +37,13 @@ class SwiftSage:
         self.swift = SwiftAgent(prompt_template, swift_llm, retrieval_augmentation)
         self.sage = SageAgent(prompt_template, sage_llm)
         self.feedback_model = Feedback(prompt_template, feedback_llm)
+        
+        self.multiple_choice = multiple_choice
+        if multiple_choice:
+            multiple_choice_llm = LLMClient(**multiple_choice_config, logger=logger)
+            self.multiple_choice_agent = MultipleChoiceAgent(prompt_template, multiple_choice_llm)
 
+        self.only_swift = only_swift
         self.swift_n = best_of_n
 
         self.messages = {}
@@ -117,17 +126,52 @@ class SwiftSage:
                     "score": 0,
                     "feedback": critical_feedback
                 }
+
+                if self.only_swift:
+                    return current_reasoning, current_solution, self.messages, self.raw_messages
+
                 continue
-            
-            # majority voting
-            solution_counts = Counter(filtered_solutions)
-            swift_solution, _ = solution_counts.most_common(1)[0]
-            swift_res = swift_res_list[cur_solutions.index(swift_solution)]
 
-            self.messages[f"Swift {i+1}"] = swift_res
+            if self.multiple_choice:
+                mc_solutions = []
+                raw_mc_messages = []
+                filtered_swift_res_list = [res for res in swift_res_list if res["solution"] in filtered_solutions]
+                # Call the multiple choice agent to choose the best solution
+                for res in filtered_swift_res_list:
+                    choice, raw_mc_message = self.multiple_choice_agent.generate_response(problem, res["plan"], res["code"], res["solution"])
+                    mc_solutions.append(choice['choice'])
+                    raw_mc_messages.append(raw_mc_message)
+                raw_mc_messages = {
+                    "model_input": raw_mc_messages[0]["model_input"],
+                    "model_output": [msg["model_output"] for msg in raw_mc_messages]
+                }
+                self.raw_messages[f"MultipleChoice {i+1}"] = raw_mc_messages
 
-            current_reasoning = swift_res['plan'] + f"\nThe generated code is:\n```python\n{swift_res['code']}\n```"
-            current_solution = swift_res['solution']
+                assert len(mc_solutions) == len(filtered_swift_res_list)
+                solution_counts = Counter(mc_solutions)
+                swift_solution, _ = solution_counts.most_common(1)[0]
+                swift_res = filtered_swift_res_list[mc_solutions.index(swift_solution)]
+
+                current_reasoning = swift_res['plan'] + f"\nThe generated code is:\n```python\n{swift_res['code']}\n```"
+                current_solution = swift_solution
+
+                self.messages[f"Swift {i+1}"] = swift_res
+                self.messages[f"Code {i+1}"] = cur_solutions
+                self.messages[f"MultipleChoice {i+1}"] = mc_solutions
+            else:
+                # majority voting
+                solution_counts = Counter(filtered_solutions)
+                swift_solution, _ = solution_counts.most_common(1)[0]
+                swift_res = swift_res_list[cur_solutions.index(swift_solution)]
+
+                current_reasoning = swift_res['plan'] + f"\nThe generated code is:\n```python\n{swift_res['code']}\n```"
+                current_solution = swift_res['solution']
+
+                self.messages[f"Swift {i+1}"] = swift_res
+                self.messages[f"Code {i+1}"] = cur_solutions
+
+            if self.only_swift:
+                return current_reasoning, current_solution, self.messages, self.raw_messages
 
             # Calling the reward model to provide feedback and score
             reward_parsed, raw_feedback_message = self.feedback_model.calculate_reward(problem, current_reasoning, current_solution)
